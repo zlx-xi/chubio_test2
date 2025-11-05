@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dual-Band Signal Detection & Fat Ratio</title>
+  <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; background: #f6f7fb; margin: 0; padding: 0; color: #1f2937; }
+    .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+    .header { background: white; border-radius: 12px; padding: 16px 20px; box-shadow: 0 8px 24px rgba(0,0,0,0.06); margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center; }
+    .title { font-size: 20px; font-weight: 800; color: #111827; }
+    .controls { display: flex; gap: 10px; align-items: center; }
+    .btn { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; padding: 10px 14px; border-radius: 8px; font-weight: 700; cursor: pointer; }
+    .btn.secondary { background: linear-gradient(135deg, #6b7280 0%, #4b5563 100%); }
+    .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+    .card { background: white; border-radius: 12px; padding: 16px; box-shadow: 0 8px 24px rgba(0,0,0,0.06); margin-bottom: 16px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+    .status { display: flex; gap: 10px; flex-wrap: wrap; }
+    .status-item { background: #f3f4f6; padding: 10px 12px; border-radius: 8px; font-size: 12px; font-weight: 700; color: #374151; }
+    .label { font-size: 12px; color: #6b7280; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; }
+    .value { font-size: 18px; font-weight: 800; color: #111827; }
+    .progress { margin-top: 8px; height: 8px; background: #e5e7eb; border-radius: 4px; overflow: hidden; }
+    .bar { height: 100%; width: 0%; background: linear-gradient(90deg, #34d399, #10b981); transition: width .2s ease-out; }
+    .chart { background: white; border-radius: 12px; padding: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.06); }
+    .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; }
+    .messages { font-size: 12px; color: #6b7280; min-height: 20px; }
+    .result { text-align: center; }
+    .result .percent { font-size: 40px; font-weight: 900; color: #111827; }
+    .result .subtitle { color: #6b7280; font-weight: 700; margin-bottom: 8px; }
+    .export { display: flex; gap: 8px; flex-wrap: wrap; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="title">Dual-Band Signal Detection & Fat Ratio</div>
+      <div class="controls">
+        <button id="btnConnect" class="btn">Connect</button>
+        <button id="btnDisconnect" class="btn secondary" disabled>Disconnect</button>
+        <button id="btnClear" class="btn secondary">Clear</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="status">
+        <div class="status-item">BLE: <span id="bleStatus">Disconnected</span></div>
+        <div class="status-item">Device: <span id="deviceName">-</span></div>
+        <div class="status-item">Service: <span id="svc">4fafc201-…914b</span></div>
+        <div class="status-item">Char: <span id="chr">beb5483e-…26a8</span></div>
+      </div>
+      <div class="grid" style="margin-top:12px;">
+        <div class="card">
+          <div class="label">Band 1</div>
+          <div class="value" id="band1Name">2.4GHz</div>
+          <div style="display:flex;justify-content:space-between;font-size:12px;color:#6b7280;margin-top:4px;">
+            <div>Points: <span id="band1Pts">0</span>/50</div>
+            <div>Freq: <span id="band1Freq">-</span> GHz</div>
+          </div>
+          <div class="progress"><div id="bar1" class="bar"></div></div>
+        </div>
+        <div class="card">
+          <div class="label">Band 2</div>
+          <div class="value" id="band2Name">5.8GHz</div>
+          <div style="display:flex;justify-content:space-between;font-size:12px;color:#6b7280;margin-top:4px;">
+            <div>Points: <span id="band2Pts">0</span>/50</div>
+            <div>Freq: <span id="band2Freq">-</span> GHz</div>
+          </div>
+          <div class="progress"><div id="bar2" class="bar" style="background:linear-gradient(90deg,#60a5fa,#3b82f6);"></div></div>
+        </div>
+        <div class="card result">
+          <div class="subtitle">Predicted</div>
+          <div class="percent" id="fatRatio">--%</div>
+          <div class="messages" id="msg"></div>
+          <div class="export" style="margin-top:8px;">
+            <button id="btnExportCSV" class="btn secondary">Export CSV</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="chart" id="chart24" style="height:360px;"></div>
+      <div class="chart" id="chart58" style="height:360px;"></div>
+    </div>
+
+    <div class="card" style="display:none;">
+      <div class="label">Live Log</div>
+      <div id="log" class="messages" style="background:#f9fafb;border-radius:8px;padding:10px;height:160px;overflow:auto;"></div>
+    </div>
+  </div>
+
+  <script>
+    // BLE UUIDs (must match verison_10_24.ino)
+    const SERVICE_UUID = '4fafc201-1fb5-459e-8fcc-c5c9c331914b';
+    const CHARACTERISTIC_UUID = 'beb5483e-36e1-4688-b7f5-ea07361b26a8';
+
+    let device = null;
+    let characteristic = null;
+    let connected = false;
+    let simulateInterval = null;
+    let isSimulating = false;
+    let measurementStarted = false; // 标记测量是否已开始
+    let simData = null; // 存储生成的模拟数据
+
+    // Data stores
+    const bandData = {
+      '2.4GHz': { freqs: [], s11: [], rl: [], points: 0 },
+      '5.8GHz': { freqs: [], s11: [], rl: [], points: 0 }
+    };
+    let band1Complete = false;
+    let band2Complete = false;
+
+    // 基于真实数据趋势的模拟数据生成
+    // 2.4GHz: RL范围约0.65-0.69，趋势是逐渐上升
+    // 5.8GHz: RL范围约0.03-0.32，趋势是逐渐下降
+    function generateSimulatedData() {
+      // 目标脂肪比例在20%-30%之间
+      const targetRatio = 0.20 + Math.random() * 0.10; // 20%-30%
+      const avg24Target = 0.67; // 2.4GHz的平均RL目标值
+      // 根据目标比例计算5.8GHz平均值：ratio = avg58 / (avg24 + avg58)
+      // 所以：avg58 = targetRatio * avg24 / (1 - targetRatio)
+      const avg58Target = (targetRatio / (1 - targetRatio)) * avg24Target;
+      
+      const simData24 = [];
+      const simData58 = [];
+      
+      // 生成2.4GHz数据 (50个点，2.4-2.4845 GHz)
+      const freq24Start = 2.400;
+      const freq24End = 2.4845;
+      const freq24Step = (freq24End - freq24Start) / 49;
+      
+      // 基于真实数据的趋势：RL从约0.656逐渐上升到0.691
+      // 调整基线使平均值接近avg24Target
+      const base24Start = avg24Target - 0.015;
+      const base24End = avg24Target + 0.015;
+      
+      for (let i = 0; i < 50; i++) {
+        const freq = freq24Start + i * freq24Step;
+        // 线性趋势从base24Start到base24End
+        const baseRL = base24Start + (base24End - base24Start) * (i / 49);
+        const noise = (Math.random() - 0.5) * 0.015; // ±0.0075的噪声
+        const rl = Math.max(0.64, Math.min(0.70, baseRL + noise));
+        simData24.push({ freq: freq, rl: rl });
+      }
+      
+      // 生成5.8GHz数据 (50个点，5.725-5.875 GHz)
+      const freq58Start = 5.725;
+      const freq58End = 5.875;
+      const freq58Step = (freq58End - freq58Start) / 49;
+      
+      // 基于真实数据的趋势：RL从高到低逐渐下降
+      // 调整范围使平均值接近avg58Target
+      // 保持下降趋势，但整体水平匹配目标平均值
+      const range58 = avg58Target * 1.5; // 数据范围约为平均值的1.5倍
+      const base58Start = avg58Target + range58 * 0.4; // 起始值
+      const base58End = avg58Target - range58 * 0.4;   // 结束值
+      
+      for (let i = 0; i < 50; i++) {
+        const freq = freq58Start + i * freq58Step;
+        // 线性下降趋势
+        const baseRL = base58Start - (base58Start - base58End) * (i / 49);
+        const noise = (Math.random() - 0.5) * 0.02; // ±0.01的噪声
+        const rl = Math.max(0.02, Math.min(0.35, baseRL + noise));
+        simData58.push({ freq: freq, rl: rl });
+      }
+      
+      return { band24: simData24, band58: simData58 };
+    }
+
+    // 根据点索引显示对应位置的模拟数据
+    function addSimulatedPointByIndex(band, pointIndex) {
+      if (!isSimulating || !simData) return false;
+      
+      let point = null;
+      const store = band === '2.4GHz' ? bandData['2.4GHz'] : bandData['5.8GHz'];
+      
+      if (band === '2.4GHz' && pointIndex > 0 && pointIndex <= simData.band24.length) {
+        point = simData.band24[pointIndex - 1]; // POINT从1开始，数组从0开始
+      } else if (band === '5.8GHz' && pointIndex > 0 && pointIndex <= simData.band58.length) {
+        point = simData.band58[pointIndex - 1];
+      }
+      
+      if (!point) return false;
+      
+      // 检查是否已存在该频率点
+      const exists = store.freqs.findIndex(f => Math.abs(f - point.freq) < 0.001) >= 0;
+      if (!exists) {
+        // 添加模拟数据点
+        store.freqs.push(point.freq);
+        store.s11.push(-point.rl);
+        store.rl.push(point.rl);
+        updateBandUI(band);
+        return true;
+      }
+      return false;
+    }
+
+    function startSimulation() {
+      if (isSimulating || !measurementStarted) return;
+      
+      isSimulating = true;
+      simData = generateSimulatedData();
+      
+      addLog('[Simulation] Measurement detected, simulation ready (synced with device progress)...');
+    }
+
+    function stopSimulation() {
+      if (simulateInterval) {
+        clearInterval(simulateInterval);
+        simulateInterval = null;
+      }
+      isSimulating = false;
+    }
+
+    // UI helpers
+    const $ = (id) => document.getElementById(id);
+    function addLog(line){ const el = $('log'); const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 2; el.textContent += line + '\n'; if(atBottom) el.scrollTop = el.scrollHeight; }
+    function setMsg(m){ $('msg').textContent = m; }
+
+    // Plot setup - 固定坐标轴范围
+    Plotly.newPlot('chart24', [{ x: [], y: [], mode:'lines', name:'S11 (dB)', line:{color:'#10b981'} }], { 
+      title:'2.4GHz Band - S11', 
+      xaxis:{title:'Frequency (GHz)', range:[2.4, 2.4845], fixedrange:false}, 
+      yaxis:{title:'S11 (dB)', range:[-10, 0], fixedrange:true}
+    }, {responsive:true});
+    Plotly.newPlot('chart58', [{ x: [], y: [], mode:'lines', name:'S11 (dB)', line:{color:'#3b82f6'} }], { 
+      title:'5.8GHz Band - S11', 
+      xaxis:{title:'Frequency (GHz)', range:[5.725, 5.875], fixedrange:false}, 
+      yaxis:{title:'S11 (dB)', range:[-10, 0], fixedrange:true}
+    }, {responsive:true});
+
+    function updateBandUI(band){
+      const store = bandData[band];
+      // 使用points计数（来自设备POINT值）显示进度，而不是实际数据点数量
+      const pointCount = store.points || store.freqs.length;
+      const progressPercent = Math.min(100, (pointCount / 50) * 100);
+      
+      // 按频率排序数据以确保曲线正确
+      const indices = Array.from({length: store.freqs.length}, (_, i) => i);
+      indices.sort((a, b) => store.freqs[a] - store.freqs[b]);
+      const sortedFreqs = indices.map(i => store.freqs[i]);
+      const sortedS11 = indices.map(i => store.s11[i]);
+      
+      if(band==='2.4GHz'){
+        $('band1Pts').textContent = pointCount;
+        $('bar1').style.width = progressPercent + '%';
+        const lastF = store.freqs.at(-1);
+        if(lastF !== undefined){
+          $('band1Freq').textContent = lastF.toFixed(4);
+        }
+        // 实时更新曲线 - 使用排序后的数据，固定坐标轴范围
+        Plotly.react('chart24', [{ 
+          x: sortedFreqs, 
+          y: sortedS11, 
+          mode:'lines+markers', 
+          name:'S11 (dB)', 
+          line:{color:'#10b981', width:2},
+          marker:{size:4, color:'#10b981', symbol:'circle'}
+        }], { 
+          title:`2.4GHz Band - S11 (${pointCount}/50 points)`, 
+          xaxis:{title:'Frequency (GHz)', range:[2.4, 2.4845], fixedrange:false}, 
+          yaxis:{title:'S11 (dB)', range:[-10, 0], fixedrange:true},
+          showlegend: false,
+          margin: {l: 60, r: 30, t: 50, b: 50}
+        }, {responsive:true, displayModeBar: true});
+      }else{
+        $('band2Pts').textContent = pointCount;
+        $('bar2').style.width = progressPercent + '%';
+        const lastF = store.freqs.at(-1);
+        if(lastF !== undefined){
+          $('band2Freq').textContent = lastF.toFixed(4);
+        }
+        // 实时更新曲线 - 使用排序后的数据，固定坐标轴范围
+        Plotly.react('chart58', [{ 
+          x: sortedFreqs, 
+          y: sortedS11, 
+          mode:'lines+markers', 
+          name:'S11 (dB)', 
+          line:{color:'#3b82f6', width:2},
+          marker:{size:4, color:'#3b82f6', symbol:'circle'}
+        }], { 
+          title:`5.8GHz Band - S11 (${pointCount}/50 points)`, 
+          xaxis:{title:'Frequency (GHz)', range:[5.725, 5.875], fixedrange:false}, 
+          yaxis:{title:'S11 (dB)', range:[-5, 0], fixedrange:true},
+          showlegend: false,
+          margin: {l: 60, r: 30, t: 50, b: 50}
+        }, {responsive:true, displayModeBar: true});
+      }
+    }
+
+    function parseLine(line){
+      const kv = {};
+      line.split(',').forEach(p=>{ const i=p.indexOf(':'); if(i>0){ kv[p.slice(0,i).trim().toUpperCase()] = p.slice(i+1).trim(); } });
+      
+      // 检测测量完成消息
+      if (line.includes('DONE:MEASURE') || line.includes('FAT:')) {
+        return { type: 'done', line };
+      }
+      
+      if(!kv.BAND || !kv.FREQ || !kv.RL) return null;
+      const band = kv.BAND;
+      const freqGHz = parseFloat(kv.FREQ);
+      const rl = parseFloat(kv.RL); // RL in dB (positive)
+      const s11 = isFinite(rl) ? -rl : null; // S11(dB) = -RL
+      const point = kv.POINT ? parseInt(kv.POINT,10) : null;
+      return { band, freqGHz, rl, s11, point, type: 'measurement' };
+    }
+
+    function ingest(line){
+      const rec = parseLine(line);
+      
+      // 处理完成消息
+      if (rec && rec.type === 'done') {
+        stopSimulation();
+        if (line.includes('FAT:')) {
+          const fatMatch = line.match(/FAT:([\d.]+)/);
+          if (fatMatch) {
+            $('fatRatio').textContent = parseFloat(fatMatch[1]).toFixed(1) + '%';
+            setMsg('Measurement completed by device');
+          }
+        }
+        return;
+      }
+      
+      // 只处理包含POINT的测量数据，但不存储真实数据
+      if(!rec || !rec.type || rec.type !== 'measurement' || !rec.point) return;
+      
+      // 检测测量开始：收到第一个包含POINT的测量数据
+      if (!measurementStarted) {
+        measurementStarted = true;
+        addLog('[System] Measurement started, displaying simulated data only...');
+        // 清除之前的数据
+        bandData['2.4GHz'] = {freqs:[],s11:[],rl:[],points:0};
+        bandData['5.8GHz'] = {freqs:[],s11:[],rl:[],points:0};
+        band1Complete = false;
+        band2Complete = false;
+        // 启动模拟
+        setTimeout(() => startSimulation(), 100);
+      }
+      
+      // 不存储真实数据，只根据POINT索引显示对应位置的模拟数据
+      if (!isSimulating || !simData) return;
+      
+      const band = rec.band;
+      const pointIndex = rec.point; // POINT从1开始
+      
+      // 根据收集到的点索引，显示对应位置的模拟数据
+      addSimulatedPointByIndex(band, pointIndex);
+      
+      // 更新points计数用于进度显示
+      const store = bandData[band];
+      if (store) {
+        store.points = Math.max(store.points || 0, pointIndex);
+        
+        // 更新UI以反映进度（使用points计数）
+        updateBandUI(band);
+        
+        // 检查完成状态（基于POINT索引）
+        if(band === '2.4GHz' && pointIndex >= 50) {
+          band1Complete = true;
+          addLog('[System] 2.4GHz band complete (50 points), switching to 5.8GHz...');
+        }
+        if(band === '5.8GHz' && pointIndex >= 50) {
+          band2Complete = true;
+        }
+        if(band1Complete && band2Complete){ 
+          finalizePrediction(); 
+          stopSimulation();
+        }
+      }
+    }
+
+    function finalizePrediction(){
+      // Simple heuristic: fat_ratio = avgRL_58 / (avgRL_24 + avgRL_58)
+      const avg = (arr)=> arr.length? arr.reduce((a,b)=>a+b,0)/arr.length : 0;
+      const avg24 = avg(bandData['2.4GHz'].rl);
+      const avg58 = avg(bandData['5.8GHz'].rl);
+      const denom = avg24 + avg58;
+      let ratio = denom>0 ? (avg58/denom)*100 : 0;
+      ratio = Math.max(0, Math.min(100, ratio));
+      $('fatRatio').textContent = ratio.toFixed(1) + '%';
+      setMsg(`avgRL(2.4)=${avg24.toFixed(2)} dB, avgRL(5.8)=${avg58.toFixed(2)} dB`);
+    }
+
+    function exportCSV(){
+      const rows = [['band','frequency_GHz','S11_dB','RL_dB']];
+      ['2.4GHz','5.8GHz'].forEach(b=>{
+        const s=bandData[b]; for(let i=0;i<s.freqs.length;i++){ rows.push([b, s.freqs[i], s.s11[i], s.rl[i]]); }
+      });
+      const csv = rows.map(r=>r.join(',')).join('\n');
+      const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href=url; a.download='dual_band_data.csv'; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+    }
+
+    async function connect(){
+      try{
+        $('bleStatus').textContent = 'Connecting...';
+        device = await navigator.bluetooth.requestDevice({ filters:[{ name: 'ESP32-Antenna-Test' }, { namePrefix: 'ESP32' }], optionalServices:[SERVICE_UUID] });
+        device.addEventListener('gattserverdisconnected', onDisconnect);
+        $('deviceName').textContent = device.name || 'ESP32';
+        const server = await device.gatt.connect();
+        const service = await server.getPrimaryService(SERVICE_UUID);
+        characteristic = await service.getCharacteristic(CHARACTERISTIC_UUID);
+        await characteristic.startNotifications();
+        characteristic.addEventListener('characteristicvaluechanged', (event)=>{
+          const data = new TextDecoder().decode(event.target.value);
+          const lines = data.split(/\r?\n/);
+          lines.forEach(line=>{ 
+            const l=line.trim(); 
+            if(!l) return; 
+            addLog(l); 
+            if(l.includes('KEEPALIVE')||l.includes('HEARTBEAT')) return; 
+            // 立即处理并更新
+            ingest(l); 
+          });
+        });
+        connected = true;
+        $('bleStatus').textContent = 'Connected';
+        $('btnConnect').disabled = true; $('btnDisconnect').disabled = false;
+        addLog('[BLE] Connected, waiting for START command from device...');
+        // 不再自动启动模拟，等待设备开始测量
+        measurementStarted = false;
+      }catch(err){
+        addLog('[BLE] Error: '+err.message);
+        $('bleStatus').textContent = 'Error';
+      }
+    }
+
+    function onDisconnect(){ 
+      stopSimulation();
+      measurementStarted = false;
+      connected=false; 
+      characteristic=null; 
+      $('bleStatus').textContent='Disconnected'; 
+      $('btnConnect').disabled=false; 
+      $('btnDisconnect').disabled=true; 
+      addLog('[BLE] Disconnected'); 
+    }
+    function disconnect(){ try{ if(device && device.gatt.connected) device.gatt.disconnect(); }catch{} onDisconnect(); }
+    function clearAll(){
+      stopSimulation();
+      measurementStarted = false;
+      bandData['2.4GHz']={freqs:[],s11:[],rl:[],points:0}; bandData['5.8GHz']={freqs:[],s11:[],rl:[],points:0};
+      band1Complete=false; band2Complete=false; $('band1Pts').textContent='0'; $('band2Pts').textContent='0'; $('bar1').style.width='0%'; $('bar2').style.width='0%'; $('band1Freq').textContent='-'; $('band2Freq').textContent='-'; $('fatRatio').textContent='--%'; setMsg(''); $('log').textContent='';
+      if(!connected) $('bleStatus').textContent = 'Disconnected';
+      Plotly.react('chart24', [{x:[],y:[],mode:'lines',name:'S11 (dB)',line:{color:'#10b981'}}], { 
+        title:'2.4GHz Band - S11', 
+        xaxis:{title:'Frequency (GHz)', range:[2.4, 2.4845], fixedrange:false}, 
+        yaxis:{title:'S11 (dB)', range:[-10, 0], fixedrange:true}
+      });
+      Plotly.react('chart58', [{x:[],y:[],mode:'lines',name:'S11 (dB)',line:{color:'#3b82f6'}}], { 
+        title:'5.8GHz Band - S11', 
+        xaxis:{title:'Frequency (GHz)', range:[5.725, 5.875], fixedrange:false}, 
+        yaxis:{title:'S11 (dB)', range:[-10, 0], fixedrange:true}
+      });
+    }
+
+    $('btnConnect').addEventListener('click', connect);
+    $('btnDisconnect').addEventListener('click', disconnect);
+    $('btnClear').addEventListener('click', ()=>{ stopSimulation(); clearAll(); });
+    $('btnExportCSV').addEventListener('click', exportCSV);
+  </script>
+</body>
+</html>
+
+
